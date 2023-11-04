@@ -21,6 +21,7 @@ import (
 
 type L1ETL struct {
 	ETL
+	LatestHeader *database.L1BlockHeader
 
 	// the batch handler may do work that we can interrupt on shutdown
 	resourceCtx    context.Context
@@ -101,7 +102,9 @@ func NewL1ETL(cfg Config, log log.Logger, db *database.DB, metrics Metricer, cli
 
 	resCtx, resCancel := context.WithCancel(context.Background())
 	return &L1ETL{
-		ETL:            etl,
+		ETL:          etl,
+		LatestHeader: latestHeader,
+
 		db:             db,
 		resourceCtx:    resCtx,
 		resourceCancel: resCancel,

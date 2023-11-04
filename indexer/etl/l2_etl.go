@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -19,6 +20,7 @@ import (
 
 type L2ETL struct {
 	ETL
+	LatestHeader *database.L2BlockHeader
 
 	// the batch handler may do work that we can interrupt on shutdown
 	resourceCtx    context.Context
@@ -27,6 +29,10 @@ type L2ETL struct {
 	tasks tasks.Group
 
 	db *database.DB
+
+	mu *sync.Mutex
+
+	listeners []chan interface{}
 }
 
 func NewL2ETL(cfg Config, log log.Logger, db *database.DB, metrics Metricer, client node.EthClient,
@@ -80,7 +86,9 @@ func NewL2ETL(cfg Config, log log.Logger, db *database.DB, metrics Metricer, cli
 
 	resCtx, resCancel := context.WithCancel(context.Background())
 	return &L2ETL{
-		ETL:            etl,
+		ETL:          etl,
+		LatestHeader: latestHeader,
+
 		resourceCtx:    resCtx,
 		resourceCancel: resCancel,
 		db:             db,
@@ -169,5 +177,27 @@ func (l2Etl *L2ETL) handleBatch(batch *ETLBatch) error {
 	}
 
 	batch.Logger.Info("indexed batch")
+	// Notify Listeners
+	l2Etl.mu.Lock()
+	for i := range l2Etl.listeners {
+		select {
+		case l2Etl.listeners[i] <- struct{}{}:
+		default:
+			// do nothing if the listener hasn't picked
+			// up the previous notif
+		}
+	}
+	l2Etl.mu.Unlock()
 	return nil
+}
+
+// Notify returns a channel that'll receive a value every time new data has
+// been persisted by the L2ETL
+func (l2Etl *L2ETL) Notify() <-chan interface{} {
+	receiver := make(chan interface{})
+	l2Etl.mu.Lock()
+	defer l2Etl.mu.Unlock()
+
+	l2Etl.listeners = append(l2Etl.listeners, receiver)
+	return receiver
 }
