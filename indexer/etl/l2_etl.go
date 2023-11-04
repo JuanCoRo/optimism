@@ -30,8 +30,7 @@ type L2ETL struct {
 
 	db *database.DB
 
-	mu *sync.Mutex
-
+	mu        sync.Mutex
 	listeners []chan interface{}
 }
 
@@ -177,8 +176,11 @@ func (l2Etl *L2ETL) handleBatch(batch *ETLBatch) error {
 	}
 
 	batch.Logger.Info("indexed batch")
+	l2Etl.LatestHeader = &l2BlockHeaders[len(l2BlockHeaders)-1]
+
 	// Notify Listeners
 	l2Etl.mu.Lock()
+	defer l2Etl.mu.Unlock()
 	for i := range l2Etl.listeners {
 		select {
 		case l2Etl.listeners[i] <- struct{}{}:
@@ -187,7 +189,7 @@ func (l2Etl *L2ETL) handleBatch(batch *ETLBatch) error {
 			// up the previous notif
 		}
 	}
-	l2Etl.mu.Unlock()
+
 	return nil
 }
 

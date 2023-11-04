@@ -31,8 +31,7 @@ type L1ETL struct {
 
 	db *database.DB
 
-	mu sync.Mutex
-
+	mu        sync.Mutex
 	listeners []chan interface{}
 }
 
@@ -198,9 +197,11 @@ func (l1Etl *L1ETL) handleBatch(batch *ETLBatch) error {
 	}
 
 	batch.Logger.Info("indexed batch")
+	l1Etl.LatestHeader = &l1BlockHeaders[len(l1BlockHeaders)-1]
 
 	// Notify Listeners
 	l1Etl.mu.Lock()
+	defer l1Etl.mu.Unlock()
 	for i := range l1Etl.listeners {
 		select {
 		case l1Etl.listeners[i] <- struct{}{}:
@@ -209,7 +210,7 @@ func (l1Etl *L1ETL) handleBatch(batch *ETLBatch) error {
 			// up the previous notif
 		}
 	}
-	l1Etl.mu.Unlock()
+
 	return nil
 }
 
