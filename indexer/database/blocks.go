@@ -98,7 +98,7 @@ func (db *blocksDB) L1BlockHeader(hash common.Hash) (*L1BlockHeader, error) {
 }
 
 func (db *blocksDB) L1BlockHeaderWithFilter(filter BlockHeader) (*L1BlockHeader, error) {
-	return db.L1BlockHeaderWithScope(func(gorm *gorm.DB) *gorm.DB { return db.gorm.Where(filter) })
+	return db.L1BlockHeaderWithScope(func(gorm *gorm.DB) *gorm.DB { return gorm.Where(&filter) })
 }
 
 func (db *blocksDB) L1BlockHeaderWithScope(scope func(*gorm.DB) *gorm.DB) (*L1BlockHeader, error) {
@@ -145,7 +145,7 @@ func (db *blocksDB) L2BlockHeader(hash common.Hash) (*L2BlockHeader, error) {
 }
 
 func (db *blocksDB) L2BlockHeaderWithFilter(filter BlockHeader) (*L2BlockHeader, error) {
-	return db.L2BlockHeaderWithScope(func(gorm *gorm.DB) *gorm.DB { return db.gorm.Where(filter) })
+	return db.L2BlockHeaderWithScope(func(gorm *gorm.DB) *gorm.DB { return gorm.Where(&filter) })
 }
 
 func (db *blocksDB) L2BlockHeaderWithScope(scope func(*gorm.DB) *gorm.DB) (*L2BlockHeader, error) {
