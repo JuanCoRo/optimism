@@ -109,6 +109,10 @@ func (l2Etl *L2ETL) Close() error {
 	if err := l2Etl.tasks.Wait(); err != nil {
 		result = errors.Join(result, fmt.Errorf("failed to await batch handler completion: %w", err))
 	}
+	// close listeners
+	for i := range l2Etl.listeners {
+		close(l2Etl.listeners[i])
+	}
 	return result
 }
 
@@ -120,17 +124,13 @@ func (l2Etl *L2ETL) Start() error {
 
 	// start ETL batch consumer
 	l2Etl.tasks.Go(func() error {
-		for {
-			// Index incoming batches (all L2 blocks)
-			batch, ok := <-l2Etl.etlBatches
-			if !ok {
-				l2Etl.log.Info("No more batches, shutting down L2 batch handler")
-				return nil
-			}
+		for batch := range l2Etl.etlBatches {
 			if err := l2Etl.handleBatch(batch); err != nil {
 				return fmt.Errorf("failed to handle batch, stopping L2 ETL: %w", err)
 			}
 		}
+		l2Etl.log.Info("no more batches, shutting down batch handler")
+		return nil
 	})
 	return nil
 }

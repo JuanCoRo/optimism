@@ -125,6 +125,10 @@ func (l1Etl *L1ETL) Close() error {
 	if err := l1Etl.tasks.Wait(); err != nil {
 		result = errors.Join(result, fmt.Errorf("failed to await batch handler completion: %w", err))
 	}
+	// close listeners
+	for i := range l1Etl.listeners {
+		close(l1Etl.listeners[i])
+	}
 	return result
 }
 
@@ -135,22 +139,19 @@ func (l1Etl *L1ETL) Start() error {
 	}
 	// start ETL batch consumer
 	l1Etl.tasks.Go(func() error {
-		for {
-			// Index incoming batches (only L1 blocks that have an emitted log)
-			batch, ok := <-l1Etl.etlBatches
-			if !ok {
-				l1Etl.log.Info("No more batches, shutting down L1 batch handler")
-				return nil
-			}
+		for batch := range l1Etl.etlBatches {
 			if err := l1Etl.handleBatch(batch); err != nil {
 				return fmt.Errorf("failed to handle batch, stopping L2 ETL: %w", err)
 			}
 		}
+		l1Etl.log.Info("no more batches, shutting down batch handler")
+		return nil
 	})
 	return nil
 }
 
 func (l1Etl *L1ETL) handleBatch(batch *ETLBatch) error {
+	// Index incoming batches (only L1 blocks that have an emitted log)
 	l1BlockHeaders := make([]database.L1BlockHeader, 0, len(batch.Headers))
 	for i := range batch.Headers {
 		if _, ok := batch.HeadersWithLog[batch.Headers[i].Hash()]; ok {
