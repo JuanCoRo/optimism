@@ -81,7 +81,6 @@ func NewBridgeProcessor(log log.Logger, db *database.DB, metrics bridge.Metricer
 		LastFinalizedL1Header: latestFinalizedL1Header,
 		LastFinalizedL2Header: latestFinalizedL2Header,
 		tasks: tasks.Group{HandleCrit: func(err error) {
-			log.Error("critical error", "err", err)
 			shutdown(fmt.Errorf("critical error in bridge processor: %w", err))
 		}},
 	}, nil
@@ -132,7 +131,7 @@ func (b *BridgeProcessor) onL1Data() error {
 	}
 
 	// `LastFinalizedL2Header` and `LastL1Header` are mutated by the same routine and can
-	// safely be mutated or read without needing any sync primitives
+	// safely be read without needing any sync primitives
 	if b.LastFinalizedL2Header == nil || b.LastFinalizedL2Header.Timestamp < b.LastL1Header.Timestamp {
 		if err := b.processFinalizedL2Events(); err != nil {
 			b.log.Error("failed to process finalized L2 events", "err", err)
@@ -159,7 +158,7 @@ func (b *BridgeProcessor) onL2Data() error {
 	}
 
 	// `LastFinalizedL1Header` and `LastL2Header` are mutated by the same routine and can
-	// safely be mutated or read without needing any sync primitives
+	// safely be read without needing any sync primitives
 	if b.LastFinalizedL1Header == nil || b.LastFinalizedL1Header.Timestamp < b.LastL2Header.Timestamp {
 		if err := b.processFinalizedL1Events(); err != nil {
 			b.log.Error("failed to process finalized L1 events", "err", err)
