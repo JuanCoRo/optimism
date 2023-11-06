@@ -482,7 +482,7 @@ func TestClientGetWithdrawals(t *testing.T) {
 		l1Opts.Value = l2Opts.Value
 		depositTx, err := optimismPortal.Receive(l1Opts)
 		require.NoError(t, err)
-		_, err = wait.ForReceiptOK(context.Background(), testSuite.L1Client, depositTx.Hash())
+		depositReceipt, err := wait.ForReceiptOK(context.Background(), testSuite.L1Client, depositTx.Hash())
 		require.NoError(t, err)
 
 		// (3.b) Initiate withdrawal transaction via L2ToL1MessagePasser contract
@@ -491,10 +491,13 @@ func TestClientGetWithdrawals(t *testing.T) {
 		l2ToL1WithdrawReceipt, err := wait.ForReceiptOK(context.Background(), testSuite.L2Client, l2ToL1MessagePasserWithdrawTx.Hash())
 		require.NoError(t, err)
 
-		// (3.c) wait for indexer processor to catchup with the L2 block containing the withdrawal tx
+		// (3.c) wait for indexer processor to catchup with the L1 & L2 block containing the deposit & withdrawal tx
 		require.NoError(t, wait.For(context.Background(), 500*time.Millisecond, func() (bool, error) {
+			l1Header := testSuite.Indexer.BridgeProcessor.LastL1Header
 			l2Header := testSuite.Indexer.BridgeProcessor.LastL2Header
-			return l2Header != nil && l2Header.Number.Uint64() >= l2ToL1WithdrawReceipt.BlockNumber.Uint64(), nil
+			seenL2 := l2Header != nil && l2Header.Number.Uint64() >= l2ToL1WithdrawReceipt.BlockNumber.Uint64()
+			seenL1 := l1Header != nil && l1Header.Number.Uint64() >= depositReceipt.BlockNumber.Uint64()
+			return seenL1 && seenL2, nil
 		}))
 
 		// (3.d) Ensure that withdrawal and deposit txs are retrievable via API
