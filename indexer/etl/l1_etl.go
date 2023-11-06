@@ -133,6 +133,8 @@ func (l1Etl *L1ETL) Close() error {
 }
 
 func (l1Etl *L1ETL) Start() error {
+	l1Etl.log.Info("starting etl...")
+
 	// start ETL batch producer
 	if err := l1Etl.ETL.Start(); err != nil {
 		return fmt.Errorf("failed to start internal ETL: %w", err)

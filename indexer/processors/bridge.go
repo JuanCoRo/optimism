@@ -120,6 +120,8 @@ func (b *BridgeProcessor) Close() error {
 	return b.tasks.Wait()
 }
 
+// onL1Data will index new bridge events for the unvisited L1 state. As new L1 bridge events
+// are processed, bridge finalization events can be processed on L2 in this same window.
 func (b *BridgeProcessor) onL1Data() error {
 	b.log.Info("notified of new L1 state", "l1_etl_block_number", b.l1Etl.LatestHeader.Number)
 
@@ -129,6 +131,8 @@ func (b *BridgeProcessor) onL1Data() error {
 		errs = errors.Join(errs, err)
 	}
 
+	// `LastFinalizedL2Header` and `LastL1Header` are mutated by the same routine and can
+	// safely be mutated or read without needing any sync primitives
 	if b.LastFinalizedL2Header == nil || b.LastFinalizedL2Header.Timestamp < b.LastL1Header.Timestamp {
 		if err := b.processFinalizedL2Events(); err != nil {
 			b.log.Error("failed to process finalized L2 events", "err", err)
@@ -139,6 +143,8 @@ func (b *BridgeProcessor) onL1Data() error {
 	return errs
 }
 
+// onL2Data will index new bridge events for the unvisited L2 state. As new L2 bridge events
+// are processed, bridge finalization events can be processed on L1 in this same window.
 func (b *BridgeProcessor) onL2Data() error {
 	if b.l2Etl.LatestHeader.Number.Cmp(bigint.Zero) == 0 {
 		return nil // skip genesis
@@ -152,6 +158,8 @@ func (b *BridgeProcessor) onL2Data() error {
 		errs = errors.Join(errs, err)
 	}
 
+	// `LastFinalizedL1Header` and `LastL2Header` are mutated by the same routine and can
+	// safely be mutated or read without needing any sync primitives
 	if b.LastFinalizedL1Header == nil || b.LastFinalizedL1Header.Timestamp < b.LastL2Header.Timestamp {
 		if err := b.processFinalizedL1Events(); err != nil {
 			b.log.Error("failed to process finalized L1 events", "err", err)
@@ -162,6 +170,8 @@ func (b *BridgeProcessor) onL2Data() error {
 	return errs
 }
 
+// Process Initiated Bridge Events
+
 func (b *BridgeProcessor) processInitiatedL1Events() error {
 	l1BridgeLog := b.log.New("bridge", "l1", "kind", "initiated")
 	lastL1BlockNumber := big.NewInt(int64(b.chainConfig.L1StartingHeight))
@@ -169,12 +179,12 @@ func (b *BridgeProcessor) processInitiatedL1Events() error {
 		lastL1BlockNumber = b.LastL1Header.Number
 	}
 
-	// Latest unobserved L1 state bounded by `blockLimits` blocks. NewDB allows for the creation of a fresh subquery stmt.
+	// Latest unobserved L1 state bounded by `blockLimits` blocks. Since this process is driven on new L1 data, we always
+	// expect this query to return a new result. NOTE: gorm's `NewDB` Session param indiciates the start of a fresh query.
 	latestL1HeaderScope := func(db *gorm.DB) *gorm.DB {
 		return db.Where("number = (?)", db.Session(&gorm.Session{NewDB: true}).Model(database.L1BlockHeader{}).
 			Select("MAX(number) as number").Order("number ASC").Limit(blocksLimit).Where("number > ?", lastL1BlockNumber))
 	}
-
 	latestL1Header, err := b.db.Blocks.L1BlockHeaderWithScope(latestL1HeaderScope)
 	if err != nil {
 		return fmt.Errorf("failed to query new L1 state: %w", err)
@@ -222,12 +232,12 @@ func (b *BridgeProcessor) processInitiatedL2Events() error {
 		lastL2BlockNumber = b.LastL2Header.Number
 	}
 
-	// Latest unvisited L2 state bounded by `blockLimits` blocks. NewDB allows for the creation of a fresh subquery stmt.
+	// Latest unobserved L2 state bounded by `blockLimits` blocks. Since this process is driven by new L2 data, we always
+	// expect this query to return a new result. NOTE: gorm's `NewDB` Session param indiciates the start of a fresh query.
 	latestL2HeaderScope := func(db *gorm.DB) *gorm.DB {
 		return db.Where("number = (?)", db.Session(&gorm.Session{NewDB: true}).Model(database.L2BlockHeader{}).
 			Select("MAX(number) as number").Order("number ASC").Limit(blocksLimit).Where("number > ?", lastL2BlockNumber))
 	}
-
 	latestL2Header, err := b.db.Blocks.L2BlockHeaderWithScope(latestL2HeaderScope)
 	if err != nil {
 		return fmt.Errorf("failed to query new L2 state: %w", err)
@@ -268,6 +278,8 @@ func (b *BridgeProcessor) processInitiatedL2Events() error {
 	return nil
 }
 
+// Process Finalized Bridge Events
+
 func (b *BridgeProcessor) processFinalizedL1Events() error {
 	l1BridgeLog := b.log.New("bridge", "l1", "kind", "finalization")
 	lastFinalizedL1BlockNumber := big.NewInt(int64(b.chainConfig.L1StartingHeight))
@@ -275,12 +287,13 @@ func (b *BridgeProcessor) processFinalizedL1Events() error {
 		lastFinalizedL1BlockNumber = b.LastFinalizedL1Header.Number
 	}
 
-	// Latest unfinalized L1 state bounded by `blockLimit` blocks that have had L2 bridge events indexed.
+	// Latest unfinalized L1 state bounded by `blockLimit` blocks that have had L2 bridge events indexed. Since L1 data
+	// is indexed independently of L2, there may not be new L1 state to finalized. NOTE: gorm's `NewDB` Session param
+	// indiciates the start of a fresh query.
 	latestL1HeaderScope := func(db *gorm.DB) *gorm.DB {
 		return db.Where("number = (?)", db.Session(&gorm.Session{NewDB: true}).Model(database.L1BlockHeader{}).Select("MAX(number) as number").
 			Order("number ASC").Limit(blocksLimit).Where("number > ? AND timestamp <= ?", lastFinalizedL1BlockNumber, b.LastL2Header.Timestamp))
 	}
-
 	latestL1Header, err := b.db.Blocks.L1BlockHeaderWithScope(latestL1HeaderScope)
 	if err != nil {
 		return fmt.Errorf("failed to query for latest unfinalized L1 state: %w", err)
@@ -329,12 +342,13 @@ func (b *BridgeProcessor) processFinalizedL2Events() error {
 		lastFinalizedL2BlockNumber = b.LastFinalizedL2Header.Number
 	}
 
-	// Latest unfinalized L2 state bounded by `blockLimit` blocks that have had L1 bridge events indexed.
+	// Latest unfinalized L2 state bounded by `blockLimit` blocks that have had L1 bridge events indexed. Since L2 data
+	// is indexed independently of L1, there may not be new L2 state to finalized. NOTE: gorm's `NewDB` Session param
+	// indiciates the start of a fresh query.
 	latestL2HeaderScope := func(db *gorm.DB) *gorm.DB {
 		return db.Where("number = (?)", db.Session(&gorm.Session{NewDB: true}).Model(database.L2BlockHeader{}).Select("MAX(number) as number").
 			Order("number ASC").Limit(blocksLimit).Where("number > ? AND timestamp <= ?", lastFinalizedL2BlockNumber, b.LastL1Header.Timestamp))
 	}
-
 	latestL2Header, err := b.db.Blocks.L2BlockHeaderWithScope(latestL2HeaderScope)
 	if err != nil {
 		return fmt.Errorf("failed to query for latest unfinalized L2 state: %w", err)
