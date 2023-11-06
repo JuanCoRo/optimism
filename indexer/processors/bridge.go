@@ -2,6 +2,7 @@ package processors
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -93,8 +94,8 @@ func (b *BridgeProcessor) Start() error {
 	b.tasks.Go(func() error {
 		l1EtlUpdates := b.l1Etl.Notify()
 		for range l1EtlUpdates {
-			done := b.metrics.RecordInterval()
-			done(b.onL1Data(context.Background()))
+			done := b.metrics.RecordL1Interval()
+			done(b.onL1Data())
 		}
 		b.log.Info("no more l1 etl updates. shutting down l1 task")
 		return nil
@@ -103,8 +104,8 @@ func (b *BridgeProcessor) Start() error {
 	b.tasks.Go(func() error {
 		l2EtlUpdates := b.l2Etl.Notify()
 		for range l2EtlUpdates {
-			done := b.metrics.RecordInterval()
-			done(b.onL2Data(context.Background()))
+			done := b.metrics.RecordL2Interval()
+			done(b.onL2Data())
 		}
 		b.log.Info("no more l2 etl updates. shutting down l2 task")
 		return nil
@@ -119,33 +120,49 @@ func (b *BridgeProcessor) Close() error {
 	return b.tasks.Wait()
 }
 
-func (b *BridgeProcessor) onL1Data(ctx context.Context) error {
+func (b *BridgeProcessor) onL1Data() error {
 	b.log.Info("notified of new L1 state", "l1_etl_block_number", b.l1Etl.LatestHeader.Number)
-	if err := b.processInitiatedL1Events(ctx); err != nil {
+
+	var errs error
+	if err := b.processInitiatedL1Events(); err != nil {
 		b.log.Error("failed to process initiated L1 events", "err", err)
+		errs = errors.Join(errs, err)
 	}
-	if err := b.processFinalizedL2Events(ctx); err != nil {
-		b.log.Error("failed to process finalized L2 events", "err", err)
+
+	if b.LastFinalizedL2Header == nil || b.LastFinalizedL2Header.Timestamp < b.LastL1Header.Timestamp {
+		if err := b.processFinalizedL2Events(); err != nil {
+			b.log.Error("failed to process finalized L2 events", "err", err)
+			errs = errors.Join(errs, err)
+		}
 	}
-	return nil
+
+	return errs
 }
 
-func (b *BridgeProcessor) onL2Data(ctx context.Context) error {
+func (b *BridgeProcessor) onL2Data() error {
 	if b.l2Etl.LatestHeader.Number.Cmp(bigint.Zero) == 0 {
 		return nil // skip genesis
 	}
 
 	b.log.Info("notified of new L2 state", "l2_etl_block_number", b.l2Etl.LatestHeader.Number)
-	if err := b.processInitiatedL2Events(ctx); err != nil {
+
+	var errs error
+	if err := b.processInitiatedL2Events(); err != nil {
 		b.log.Error("failed to process initiated L2 events", "err", err)
+		errs = errors.Join(errs, err)
 	}
-	if err := b.processFinalizedL1Events(ctx); err != nil {
-		b.log.Error("failed to process finalized L1 events", "err", err)
+
+	if b.LastFinalizedL1Header == nil || b.LastFinalizedL1Header.Timestamp < b.LastL2Header.Timestamp {
+		if err := b.processFinalizedL1Events(); err != nil {
+			b.log.Error("failed to process finalized L1 events", "err", err)
+			errs = errors.Join(errs, err)
+		}
 	}
-	return nil
+
+	return errs
 }
 
-func (b *BridgeProcessor) processInitiatedL1Events(ctx context.Context) error {
+func (b *BridgeProcessor) processInitiatedL1Events() error {
 	l1BridgeLog := b.log.New("bridge", "l1", "kind", "initiated")
 	lastL1BlockNumber := big.NewInt(int64(b.chainConfig.L1StartingHeight))
 	if b.LastL1Header != nil {
@@ -194,10 +211,11 @@ func (b *BridgeProcessor) processInitiatedL1Events(ctx context.Context) error {
 	}
 
 	b.LastL1Header = latestL1Header
+	b.metrics.RecordL1LatestHeight(latestL1Header.Number)
 	return nil
 }
 
-func (b *BridgeProcessor) processInitiatedL2Events(ctx context.Context) error {
+func (b *BridgeProcessor) processInitiatedL2Events() error {
 	l2BridgeLog := b.log.New("bridge", "l2", "kind", "initiated")
 	lastL2BlockNumber := bigint.Zero
 	if b.LastL2Header != nil {
@@ -246,10 +264,11 @@ func (b *BridgeProcessor) processInitiatedL2Events(ctx context.Context) error {
 	}
 
 	b.LastL2Header = latestL2Header
+	b.metrics.RecordL2LatestHeight(latestL2Header.Number)
 	return nil
 }
 
-func (b *BridgeProcessor) processFinalizedL1Events(ctx context.Context) error {
+func (b *BridgeProcessor) processFinalizedL1Events() error {
 	l1BridgeLog := b.log.New("bridge", "l1", "kind", "finalization")
 	lastFinalizedL1BlockNumber := big.NewInt(int64(b.chainConfig.L1StartingHeight))
 	if b.LastFinalizedL1Header != nil {
@@ -266,7 +285,8 @@ func (b *BridgeProcessor) processFinalizedL1Events(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to query for latest unfinalized L1 state: %w", err)
 	} else if latestL1Header == nil {
-		return fmt.Errorf("no new L1 state found")
+		l1BridgeLog.Debug("no new l1 state to finalize", "last_finalized_block_number", lastFinalizedL1BlockNumber)
+		return nil
 	}
 
 	fromL1Height, toL1Height := new(big.Int).Add(lastFinalizedL1BlockNumber, bigint.One), latestL1Header.Number
@@ -298,10 +318,11 @@ func (b *BridgeProcessor) processFinalizedL1Events(ctx context.Context) error {
 	}
 
 	b.LastFinalizedL1Header = latestL1Header
+	b.metrics.RecordL1LatestFinalizedHeight(latestL1Header.Number)
 	return nil
 }
 
-func (b *BridgeProcessor) processFinalizedL2Events(ctx context.Context) error {
+func (b *BridgeProcessor) processFinalizedL2Events() error {
 	l2BridgeLog := b.log.New("bridge", "l2", "kind", "finalization")
 	lastFinalizedL2BlockNumber := bigint.Zero
 	if b.LastFinalizedL2Header != nil {
@@ -318,7 +339,8 @@ func (b *BridgeProcessor) processFinalizedL2Events(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to query for latest unfinalized L2 state: %w", err)
 	} else if latestL2Header == nil {
-		return fmt.Errorf("no new L2 state found")
+		l2BridgeLog.Debug("no new l2 state to finalize", "last_finalized_block_number", lastFinalizedL2BlockNumber)
+		return nil
 	}
 
 	fromL2Height, toL2Height := new(big.Int).Add(lastFinalizedL2BlockNumber, bigint.One), latestL2Header.Number
@@ -350,5 +372,6 @@ func (b *BridgeProcessor) processFinalizedL2Events(ctx context.Context) error {
 	}
 
 	b.LastFinalizedL2Header = latestL2Header
+	b.metrics.RecordL2LatestFinalizedHeight(latestL2Header.Number)
 	return nil
 }
