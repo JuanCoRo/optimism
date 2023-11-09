@@ -81,7 +81,7 @@ func (f *fakePoS) Start() error {
 						Amount: uint64(withdrawalsRNG.Intn(50_000_000_000) + 1),
 					}
 				}
-				res, err := f.engineAPI.ForkchoiceUpdatedV2(engine.ForkchoiceStateV1{
+				res, err := f.engineAPI.ForkchoiceUpdatedV3(engine.ForkchoiceStateV1{
 					HeadBlockHash:      head.Hash(),
 					SafeBlockHash:      safe.Hash(),
 					FinalizedBlockHash: finalized.Hash(),
@@ -109,16 +109,19 @@ func (f *fakePoS) Start() error {
 					tim.Stop()
 					return nil
 				}
-				envelope, err := f.engineAPI.GetPayloadV2(*res.PayloadID)
+				envelope, err := f.engineAPI.GetPayloadV3(*res.PayloadID)
 				if err != nil {
 					f.log.Error("failed to finish building L1 block", "err", err)
 					continue
 				}
-				if _, err := f.engineAPI.NewPayloadV2(*envelope.ExecutionPayload); err != nil {
+				// INVESTIGATION: what's the good spot to grab the new args to newpayloadv3?
+				versionedHashes := []common.Hash{} // FIXME
+				beaconRoot := common.Hash{}        // FIXME
+				if _, err := f.engineAPI.NewPayloadV3(*envelope.ExecutionPayload, versionedHashes, &beaconRoot); err != nil {
 					f.log.Error("failed to insert built L1 block", "err", err)
 					continue
 				}
-				if _, err := f.engineAPI.ForkchoiceUpdatedV2(engine.ForkchoiceStateV1{
+				if _, err := f.engineAPI.ForkchoiceUpdatedV3(engine.ForkchoiceStateV1{
 					HeadBlockHash:      envelope.ExecutionPayload.BlockHash,
 					SafeBlockHash:      safe.Hash(),
 					FinalizedBlockHash: finalized.Hash(),

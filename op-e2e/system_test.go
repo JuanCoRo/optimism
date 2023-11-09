@@ -364,6 +364,35 @@ func TestFinalize(t *testing.T) {
 	require.NotZerof(t, l2Finalized.NumberU64(), "must have finalized L2 block")
 }
 
+// TestDencunFinalize tests if L2 finalizes in a post-4844 environment
+func TestDencunFinalize(t *testing.T) {
+	InitParallel(t)
+
+	cfg := DefaultSystemConfig(t)
+	//FIXME how do we turn on dencun/cancun? need to edit the geth genesis but where is that?
+
+	sys, err := cfg.Start(t)
+	require.Nil(t, err, "Error starting up system")
+	defer sys.Close()
+
+	// FIXME send some blob-containing txns down to l1 (see e2eutils)
+
+	l2Seq := sys.Clients["sequencer"]
+
+	// as configured in the extra geth lifecycle in testing setup
+	const finalizedDistance = 8
+	// Wait enough time for L1 to finalize and L2 to confirm its data in finalized L1 blocks
+	time.Sleep(time.Duration((finalizedDistance+6)*cfg.DeployConfig.L1BlockTime) * time.Second)
+
+	// fetch the finalizes head of geth
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	l2Finalized, err := l2Seq.BlockByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
+	require.NoError(t, err)
+
+	require.NotZerof(t, l2Finalized.NumberU64(), "must have finalized L2 block")
+}
+
 func TestMissingBatchE2E(t *testing.T) {
 	InitParallel(t)
 	// Note this test zeroes the balance of the batch-submitter to make the batches unable to go into L1.
